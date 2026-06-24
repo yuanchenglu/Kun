@@ -1,9 +1,12 @@
-import { join } from 'node:path'
-import { homedir } from 'node:os'
 import type { McpCapabilityConfig, McpServerConfig } from '../../contracts/capabilities.js'
 import { McpConnectionManager, type McpConnectionStateInfo } from './mcp-connection-manager.js'
 import { readMcpConfigFile, watchMcpConfigFile, type McpConfigError } from './mcp-config-file.js'
-import { buildMcpToolProviders, type McpToolProviderBuildResult, type McpToolProviderOptions } from './mcp-tool-provider.js'
+import {
+  buildMcpToolProviders,
+  type McpServerDiagnostic,
+  type McpToolProviderBuildResult,
+  type McpToolProviderOptions
+} from './mcp-tool-provider.js'
 
 export type McpRuntimeStatus = {
   servers: McpConnectionStateInfo[]
@@ -20,8 +23,6 @@ export type McpRuntimeManagerOptions = McpToolProviderOptions & {
   onServerStatusChange?: (info: McpConnectionStateInfo) => void
   onConfigErrors?: (errors: McpConfigError[]) => void
 }
-
-const DEFAULT_MCP_CONFIG_PATH = join(homedir(), '.kun', 'mcp.json')
 
 /**
  * High-level MCP runtime manager.
@@ -44,7 +45,7 @@ export class McpRuntimeManager {
 
   constructor(options: McpRuntimeManagerOptions = {}) {
     this.options = options
-    this.configFilePath = options.configFilePath ?? DEFAULT_MCP_CONFIG_PATH
+    this.configFilePath = options.configFilePath ?? ''
     this.connectionManager = new McpConnectionManager({
       nowIso: options.nowIso,
       clientFactory: options.clientFactory,
@@ -61,20 +62,23 @@ export class McpRuntimeManager {
    */
   async initialize(baseConfig?: McpCapabilityConfig): Promise<McpToolProviderBuildResult> {
     let fileConfig: McpCapabilityConfig | undefined
-    try {
-      const result = await readMcpConfigFile(this.configFilePath)
-      this.configLoaded = true
-      if (result.ok) { fileConfig = result.config }
-      else { this.configErrors = result.errors; this.options.onConfigErrors?.(result.errors) }
-    } catch { /* non-fatal */ }
+    if (this.configFilePath) {
+      try {
+        const result = await readMcpConfigFile(this.configFilePath)
+        this.configLoaded = true
+        if (result.ok) { fileConfig = result.config }
+        else { this.configErrors = result.errors; this.options.onConfigErrors?.(result.errors) }
+      } catch { /* non-fatal */ }
+    }
 
     const mergedConfig = mergeMcpConfigs(baseConfig, fileConfig)
 
     this.buildResult = await buildMcpToolProviders(mergedConfig, this.options)
+    this.emitBuildDiagnostics(this.buildResult.diagnostics)
 
-    if (mergedConfig?.enabled && mergedConfig.servers) {
+    if (this.options.watchConfig && mergedConfig?.enabled && mergedConfig.servers) {
       for (const [serverId, server] of Object.entries(mergedConfig.servers)) {
-        void this.connectionManager.addServer(serverId, server as McpServerConfig)
+        await this.connectionManager.addServer(serverId, server as McpServerConfig)
       }
     }
 
@@ -99,6 +103,7 @@ export class McpRuntimeManager {
   getConnectionManager(): McpConnectionManager { return this.connectionManager }
 
   startWatching(): void {
+    if (!this.configFilePath) return
     if (this.unwatchConfig) return
     this.unwatchConfig = watchMcpConfigFile(
       this.configFilePath,
@@ -112,6 +117,22 @@ export class McpRuntimeManager {
   }
 
   async close(): Promise<void> { this.stopWatching(); await this.connectionManager.close() }
+
+  private emitBuildDiagnostics(diagnostics: McpServerDiagnostic[]): void {
+    for (const diagnostic of diagnostics) {
+      this.options.onServerStatusChange?.({
+        serverId: diagnostic.id,
+        status: diagnostic.status,
+        toolCount: diagnostic.toolCount,
+        transport: diagnostic.transport,
+        enabled: diagnostic.enabled,
+        reconnectAttempt: diagnostic.reconnectAttempt ?? 0,
+        ...(diagnostic.lastActivityAt ? { lastActivityAt: diagnostic.lastActivityAt } : {}),
+        ...(diagnostic.lastConnectedAt ? { lastConnectedAt: diagnostic.lastConnectedAt } : {}),
+        ...(diagnostic.lastError ? { lastError: diagnostic.lastError } : {})
+      })
+    }
+  }
 
   // ─── internal ────────────────────────────────────────────────────────
 

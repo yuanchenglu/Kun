@@ -15,7 +15,7 @@ import { CapabilityRegistry } from '../adapters/tool/capability-registry.js'
 import { buildGoalLocalTools } from '../adapters/tool/goal-tools.js'
 import { buildTodoLocalTools } from '../adapters/tool/todo-tools.js'
 import { LocalToolHost, buildDefaultLocalTools } from '../adapters/tool/local-tool-host.js'
-import { buildMcpToolProviders } from '../adapters/tool/mcp-tool-provider.js'
+import type { McpConnectionStateInfo } from '../adapters/tool/mcp-connection-manager.js'
 import { McpRuntimeManager } from '../adapters/tool/mcp-runtime-manager.js'
 import { buildMemoryToolProviders } from '../adapters/tool/memory-tool-provider.js'
 import { buildSkillToolProviders } from '../adapters/tool/skill-tool-provider.js'
@@ -214,27 +214,13 @@ export async function createKunServeRuntime(
       baseDelayMs: 2000,
       maxDelayMs: 30000,
     } : undefined,
+    onServerStatusChange: (info) => {
+      void recordMcpStatusEvent(events, info)
+    },
     watchConfig: false,
   })
   const [mcpProviders, skillRuntime] = await Promise.all([
-    mcpRuntimeManager.initialize(options.capabilities?.mcp).then((result) => {
-      // Propagate MCP status changes to the event bus (#168)
-      mcpRuntimeManager.getConnectionManager().getAllStatuses().forEach((info) => {
-        void events.record({
-          kind: 'mcp_status_changed',
-          threadId: 'system',
-          serverId: info.serverId,
-          status: info.status,
-          toolCount: info.toolCount,
-          transport: info.transport,
-          ...(info.lastError ? { lastError: info.lastError } : {}),
-          ...(info.lastActivityAt ? { lastActivityAt: info.lastActivityAt } : {}),
-          ...(info.lastConnectedAt ? { lastConnectedAt: info.lastConnectedAt } : {}),
-          ...(info.reconnectAttempt > 0 ? { reconnectAttempt: info.reconnectAttempt } : {}),
-        })
-      })
-      return result
-    }),
+    mcpRuntimeManager.initialize(options.capabilities?.mcp),
     SkillRuntime.create(options.capabilities?.skills),
     seedUsageCarryover({ threadStore, sessionStore, usageService })
   ])
@@ -668,4 +654,22 @@ export async function startKunServe(
       }
     }
   }
+}
+
+function recordMcpStatusEvent(
+  events: RuntimeEventRecorder,
+  info: McpConnectionStateInfo
+): Promise<void> {
+  return events.record({
+    kind: 'mcp_status_changed',
+    threadId: 'system',
+    serverId: info.serverId,
+    status: info.status,
+    toolCount: info.toolCount,
+    transport: info.transport,
+    ...(info.lastError ? { lastError: info.lastError } : {}),
+    ...(info.lastActivityAt ? { lastActivityAt: info.lastActivityAt } : {}),
+    ...(info.lastConnectedAt ? { lastConnectedAt: info.lastConnectedAt } : {}),
+    ...(info.reconnectAttempt > 0 ? { reconnectAttempt: info.reconnectAttempt } : {})
+  })
 }
