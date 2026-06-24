@@ -326,7 +326,7 @@ describe('SkillRuntime', () => {
 
     await h.loop.runTurn(h.threadId, h.turnId)
 
-    expect(seenRequest?.contextInstructions?.[0]).toContain('Always inspect the diff first.')
+    expect(seenRequest?.contextInstructions?.join('\n')).toContain('Always inspect the diff first.')
     expect(seenRequest?.tools.map((tool) => tool.name)).toEqual(['read'])
     const turn = await h.turns.getTurn(h.threadId, h.turnId)
     expect(turn?.activeSkillIds).toEqual(['review'])

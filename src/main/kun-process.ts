@@ -600,9 +600,17 @@ async function skillCapabilityConfigForRuntime(
   const manualExisting = stringArrayValue(existing.roots)
     .map(normalizeSkillRootPath)
     .filter((path) => path.length > 0 && !managed.has(comparableSkillRootPath(path)))
+  const guiRoots = await guiSkillRootsForRuntime(settings)
+  const manualGlobalExisting = stringArrayValue(existing.globalRoots)
+    .map(normalizeSkillRootPath)
+    .filter((path) => path.length > 0 && !managed.has(comparableSkillRootPath(path)))
   const roots = uniqueStrings([
     ...manualExisting,
-    ...(await guiSkillRootsForRuntime(settings)).map((root) => root.path)
+    ...guiRoots.filter((root) => root.scope === 'project').map((root) => root.path)
+  ])
+  const globalRoots = uniqueStrings([
+    ...manualGlobalExisting,
+    ...guiRoots.filter((root) => root.scope === 'global').map((root) => root.path)
   ])
   return {
     ...existing,
@@ -610,10 +618,9 @@ async function skillCapabilityConfigForRuntime(
     // enable toggle, so a persisted `enabled: false` is only ever the schema
     // default leaking onto disk — it must not permanently suppress discovered
     // skills. An explicit `true` still forces on even with no roots.
-    enabled: roots.length > 0 || existing.enabled === true,
+    enabled: roots.length > 0 || globalRoots.length > 0 || existing.enabled === true,
     roots,
-    // #149: Pass global skill roots from settings (e.g. ~/.kun/skills)
-    globalRoots: existing.globalRoots ?? [],
+    globalRoots,
     legacySkillMd: existing.legacySkillMd === false ? false : true
   }
 }
